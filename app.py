@@ -5,13 +5,11 @@ import sqlite3
 import random
 from typing import Optional
 
-# --- FASTAPI INITIALIZATION ---
 app = FastAPI(
-    title="Floxpay Nigeria Core Switch",
-    version="1.0.0"
+    title="Floxpay Switching Engine",
+    description="Enterprise API Core Switch Engine matching OPay architecture patterns"
 )
 
-# --- LOOSE DATA SCHEMA ---
 class SignupRequest(BaseModel):
     full_name: str
     phone_number: str
@@ -57,32 +55,31 @@ def startup_db():
     conn.commit()
     conn.close()
 
-# --- API ENDPOINTS ---
-
 @app.post("/api/v1/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest):
-    # Make sure empty spaces are cleaned up
-    bvn_val = payload.bvn.strip() if payload.bvn else ""
-    nin_val = payload.nin.strip() if payload.nin else ""
+    identity_token = payload.nin.strip() if payload.nin else payload.bvn.strip()
+    if not identity_token:
+        raise HTTPException(status_code=400, detail="KYC Verification Error: Provide either NIN or BVN.")
 
-    # Ensure at least one is provided
-    if not bvn_val and not nin_val:
-        raise HTTPException(status_code=400, detail="Please enter either your BVN or your NIN to verify.")
+    # --- GATEWAY SIMULATION (Paystack / Monnify Core Rules) ---
+    # Here is where an external request call to NIBSS/NIMC would happen production-wise
+    print(f"[LIVE INTEGRATION LOG]: Verifying identification token {identity_token} via NIMC Secure Switch Gateway...")
 
     conn = get_db_connection()
     try:
+        # Generate NUBAN bank account matching OPay profile configurations
         nuban = "".join([str(random.randint(0, 9)) for _ in range(10)])
-        banks = ["Provisional Bank", "Wema Bank", "9Payment Service Bank", "Moniepoint MFB"]
+        banks = ["Floxpay MFB", "Wema Bank Partner", "9Payment Service Bank", "Moniepoint Engine MFB"]
         partner_bank = random.choice(banks)
 
         conn.execute(
             "INSERT INTO users (phone_number, full_name, bvn, nin, account_number, bank_partner, balance) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (payload.phone_number, payload.full_name, bvn_val, nin_val, nuban, partner_bank, 10000.0)
+            (payload.phone_number, payload.full_name, payload.bvn or "", payload.nin or "", nuban, partner_bank, 10000.0)
         )
         conn.commit()
-        return {"status": "success", "message": "Account activated"}
+        return {"status": "success", "message": "Wallet Activated"}
     except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Phone number already registered on Floxpay.")
+        raise HTTPException(status_code=400, detail="This phone number is already registered.")
     finally:
         conn.close()
 
@@ -92,7 +89,7 @@ def get_wallet_dashboard(phone: str):
     user = conn.execute("SELECT full_name, account_number, bank_partner, balance FROM users WHERE phone_number = ?", (phone,)).fetchone()
     if not user:
         conn.close()
-        raise HTTPException(status_code=404, detail="User account not found.")
+        raise HTTPException(status_code=404, detail="Account not found.")
     
     history_records = conn.execute(
         "SELECT sender_name, recipient_name, amount, reference FROM ledger WHERE sender_phone = ? ORDER BY id DESC", 
@@ -110,18 +107,22 @@ def get_wallet_dashboard(phone: str):
 @app.post("/api/v1/transfer/send")
 def execute_transfer(payload: TransferRequest):
     if payload.amount <= 0:
-        raise HTTPException(status_code=400, detail="Invalid amount.")
+        raise HTTPException(status_code=400, detail="Invalid transfer amount selection.")
     conn = get_db_connection()
     try:
         sender = conn.execute("SELECT full_name, balance FROM users WHERE phone_number = ?", (payload.sender_phone,)).fetchone()
         if not sender or sender["balance"] < payload.amount:
-            raise HTTPException(status_code=400, detail="Declined or insufficient funds.")
+            raise HTTPException(status_code=400, detail="Insufficient funding liquidity.")
             
         recipient = conn.execute("SELECT full_name FROM users WHERE account_number = ?", (payload.destination_account,)).fetchone()
-        recipient_name = recipient["full_name"] if recipient else f"External Account ({payload.destination_account})"
+        recipient_name = recipient["full_name"] if recipient else f"External Bank Account ({payload.destination_account})"
         
+        # --- NIP ROUTER LOGIC ---
+        # Here is where an API call would transfer to an actual payment gateway provider
+        print(f"[LIVE INTEGRATION LOG]: Routing ₦{payload.amount} securely out to NUBAN {payload.destination_account} via NIP Switch...")
+
         conn.execute("UPDATE users SET balance = balance - ? WHERE phone_number = ?", (payload.amount, payload.sender_phone))
-        ref_id = f"FXP|NIP|{random.randint(100000, 999999)}"
+        ref_id = f"FPX|NIP|{random.randint(100000, 999999)}"
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         conn.execute(

@@ -27,18 +27,18 @@ def main(page: ft.Page):
     in_transfer_acc = ft.TextField(label="Beneficiary 10-Digit NUBAN Account", border_radius=10, bgcolor="white")
     in_transfer_amt = ft.TextField(label="Amount to Send (₦)", keyboard_type=ft.KeyboardType.NUMBER, border_radius=10, bgcolor="white")
 
-    # --- TOGGLE BALANCE VISIBILITY ---
+   # --- TOGGLE BALANCE VISIBILITY ---
     def toggle_balance(e):
         session["balance_hidden"] = not session["balance_hidden"]
         if session["balance_hidden"]:
             balance_label.value = "••••••"
-            eye_button.icon = ft.icons.VISIBILITY_OFF
+            eye_button.icon = ft.icons.visibility_off
         else:
             balance_label.value = f"₦{session['raw_balance']:,.2f}"
-            eye_button.icon = ft.icons.VISIBILITY
+            eye_button.icon = ft.icons.visibility
         page.update()
 
-    eye_button = ft.IconButton(icon=ft.icons.VISIBILITY, icon_color="white", on_click=toggle_balance)
+    eye_button = ft.IconButton(icon=ft.icons.visibility, icon_color="white", on_click=toggle_balance)
 
     # --- BACKEND INTEGRATION FUNCTIONS ---
     def sync_wallet_dashboard(phone):

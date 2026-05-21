@@ -1,187 +1,230 @@
-import flet as ft
-import requests
+from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel, Field
+from decimal import Decimal
+from datetime import datetime
+import sqlite3
+import random
 
-API_BASE_URL = "http://127.0.0.1:8000"
+# --- FASTAPI INIT ---
+app = FastAPI(
+    title="Floxpay Nigeria Core Switch",
+    version="1.0.0",
+    description="CBN-compliant database core and automated NIP settlement"
+)
 
-def main(page: ft.Page):
-    page.title = "Floxpay Nigeria"
-    page.window.width = 430
-    page.window.height = 840
-    page.theme_mode = ft.ThemeMode.DARK
-    page.scroll = ft.ScrollMode.ADAPTIVE
+DB_FILE = "floxpay.db"
 
-    session = {"phone": None}
+# --- DB CONNECTION ---
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    # UI Display Components using universally supported color strings
-    brand_header = ft.Text("FLOXPAY NIGERIA", size=26, weight=ft.FontWeight.BOLD, color="orange")
-    user_welcome = ft.Text("Secure Digital Ledger System", size=14, color="grey")
-    
-    account_label = ft.Text("Account: Log in to view details", size=13, color="grey")
-    balance_label = ft.Text("₦0.00", size=38, weight=ft.FontWeight.BOLD, color="white")
-    status_bar = ft.Text("", size=14, weight=ft.FontWeight.W_500)
-    
-    # Scrollable transaction layout stream container
-    history_container = ft.Column(spacing=5)
 
-    # Forms fields components
-    in_login_phone = ft.TextField(label="Registered Phone Number", hint_text="e.g. 08011112222")
-    
-    in_transfer_acc = ft.TextField(label="Beneficiary 10-Digit Account")
-    in_transfer_amt = ft.TextField(label="Amount (₦)", keyboard_type=ft.KeyboardType.NUMBER)
+# --- MODELS ---
+class SignupRequest(BaseModel):
+    full_name: str
+    phone_number: str
+    bvn: str = Field(..., min_length=11, max_length=11)
+    nin: str = Field(..., min_length=11, max_length=11)
 
-    in_reg_name = ft.TextField(label="Full Legal Name")
-    in_reg_phone = ft.TextField(label="Mobile Number")
-    in_reg_bvn = ft.TextField(label="11-Digit BVN", max_length=11)
-    in_reg_nin = ft.TextField(label="11-Digit NIN", max_length=11)
 
-    # --- Operational App Functions ---
-    def sync_dashboard(phone):
-        try:
-            res = requests.get(f"{API_BASE_URL}/api/v1/wallet/{phone}")
-            if res.status_code == 200:
-                data = res.json()
-                user_welcome.value = f"Welcome, {data['name']}"
-                account_label.value = f"{data['bank_partner']} | Nuban: {data['account_number']}"
-                balance_label.value = f"₦{data['balance']:,.2f}"
-                session["phone"] = phone
-                
-                # Clear and re-populate the scrollable live transaction table
-                history_container.controls.clear()
-                tx_list = data.get("history", [])
-                
-                if not tx_list:
-                    history_container.controls.append(ft.Text("No recent transaction logs found.", size=12, color="grey"))
-                else:
-                    for tx in tx_list:
-                        history_container.controls.append(
-                            ft.Container(
-                                content=ft.Row([
-                                    ft.Column([
-                                        ft.Text(f"From: {tx['sender_name']} -> To: {tx['recipient_name']}", size=12, weight=ft.FontWeight.BOLD),
-                                        ft.Text(f"Ref: {tx['reference']}", size=10, color="grey")
-                                    ]),
-                                    ft.Text(f"₦{tx['amount']:,.2f}", size=13, color="green", weight=ft.FontWeight.BOLD)
-                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                                padding=10, bgcolor="black", border_radius=6
-                            )
-                        )
-                status_bar.value = "Wallet ledger update completed."
-                status_bar.color = "green"
-            else:
-                status_bar.value = "Lookup rejected by clearing interface."
-                status_bar.color = "red"
-        except Exception:
-            status_bar.value = "CRITICAL: Floxpay secure background core is unreachable."
-            status_bar.color = "red"
-        page.update()
+class TransferRequest(BaseModel):
+    sender_phone: str
+    destination_account: str
+    amount: float
 
-    def action_login(e):
-        p = in_login_phone.value.strip()
-        if not p:
-            status_bar.value = "Please complete entry requirement."
-            status_bar.color = "orange"
-            page.update()
-            return
-        sync_dashboard(p)
 
-    def action_signup(e):
-        payload = {
-            "full_name": in_reg_name.value.strip(),
-            "phone_number": in_reg_phone.value.strip(),
-            "bvn": in_reg_bvn.value.strip(),
-            "nin": in_reg_nin.value.strip()
-        }
-        if not all(payload.values()):
-            status_bar.value = "All onboarding fields are mandatory!"
-            status_bar.color = "red"
-            page.update()
-            return
-        
-        try:
-            res = requests.post(f"{API_BASE_URL}/api/v1/auth/signup", json=payload)
-            if res.status_code == 201:
-                status_bar.value = "Account Activated! Welcome bonus of ₦10k added."
-                status_bar.color = "green"
-                sync_dashboard(payload["phone_number"])
-            else:
-                status_bar.value = res.json().get("detail", "BVN/NIN verification failed.")
-                status_bar.color = "red"
-        except Exception:
-            status_bar.value = "Handshake error to verification servers."
-            status_bar.color = "red"
-        page.update()
+# --- INIT DB ---
+@app.on_event("startup")
+def startup_db():
 
-    def action_transfer(e):
-        if not session["phone"]:
-            status_bar.value = "Please sign in to authenticate session tokens."
-            status_bar.color = "red"
-            page.update()
-            return
-        
-        payload = {
-            "sender_phone": session["phone"],
-            "destination_account": in_transfer_acc.value.strip(),
-            "amount": float(in_transfer_amt.value or 0)
-        }
-        
-        try:
-            res = requests.post(f"{API_BASE_URL}/api/v1/transfer/send", json=payload)
-            if res.status_code == 200:
-                status_bar.value = "Settlement execution completed via NIP core switch!"
-                status_bar.color = "green"
-                sync_dashboard(session["phone"])
-            else:
-                status_bar.value = res.json().get("detail", "Transaction declined.")
-                status_bar.color = "red"
-        except Exception:
-            status_bar.value = "Internal transaction clearance processing timeout."
-            status_bar.color = "red"
-        page.update()
+    conn = get_db_connection()
 
-    # Cards Framework Packaging
-    balance_card = ft.Container(
-        content=ft.Column([
-            account_label,
-            ft.Text("Available Balance (NGN)", size=11, color="orange"),
-            balance_label
-        ]),
-        padding=20, bgcolor="grey", border_radius=16
-    )
-
-    history_card = ft.Container(
-        content=ft.Column([
-            ft.Text("Recent Transaction History Logs", size=13, weight=ft.FontWeight.BOLD, color="orange"),
-            ft.Divider(color="grey"),
-            history_container
-        ]),
-        padding=15, bgcolor="black", border_radius=12
-    )
-
-    page.add(
-        ft.Container(
-            content=ft.Column([
-                brand_header, user_welcome,
-                balance_card,
-                ft.Divider(color="grey"),
-                ft.Text("Account Access (Sign In)", size=14, weight=ft.FontWeight.BOLD, color="orange"),
-                in_login_phone,
-                ft.ElevatedButton("Login to Floxpay Account", on_click=action_login, bgcolor="orange", color="white", width=390),
-                ft.Divider(color="grey"),
-                ft.Text("Open Instant Floxpay Wallet", size=14, weight=ft.FontWeight.BOLD, color="orange"),
-                in_reg_name, in_reg_phone, in_reg_bvn, in_reg_nin,
-                ft.ElevatedButton("Register (BVN / NIN)", on_click=action_signup, bgcolor="black", color="white", width=390),
-                ft.Divider(color="grey"),
-                ft.Text("Instant NIP Interbank Funds Router", size=14, weight=ft.FontWeight.BOLD, color="orange"),
-                in_transfer_acc, in_transfer_amt,
-                ft.ElevatedButton("Authorize Fund Settlement", on_click=action_transfer, bgcolor="green", color="white", width=390),
-                ft.Divider(color="grey"),
-                history_card,
-                ft.Divider(color="grey"),
-                status_bar
-            ], spacing=14),
-            padding=15
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            phone_number TEXT PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            bvn TEXT NOT NULL,
+            nin TEXT NOT NULL,
+            account_number TEXT UNIQUE NOT NULL,
+            bank_partner TEXT NOT NULL,
+            balance REAL NOT NULL DEFAULT 10000.0
         )
-    )
+    """)
 
-if __name__ == "__main__":
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_phone TEXT NOT NULL,
+            sender_name TEXT NOT NULL,
+            recipient_account TEXT NOT NULL,
+            recipient_name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            reference TEXT UNIQUE NOT NULL,
+            date TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+# --- SIGNUP ---
+@app.post("/api/v1/auth/signup")
+def signup(payload: SignupRequest):
+
+    conn = get_db_connection()
+
+    try:
+        nuban = "".join([str(random.randint(0, 9)) for _ in range(10)])
+
+        banks = [
+            "Provisional Bank",
+            "Wema Bank",
+            "9Payment Service Bank",
+            "Moniepoint MFB"
+        ]
+
+        conn.execute("""
+            INSERT INTO users
+            (phone_number, full_name, bvn, nin, account_number, bank_partner, balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            payload.phone_number,
+            payload.full_name,
+            payload.bvn,
+            payload.nin,
+            nuban,
+            random.choice(banks),
+            10000.0
+        ))
+
+        conn.commit()
+
+        return {
+            "status": "success",
+            "account_number": nuban,
+            "message": "Account activated"
+        }
+
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Phone already exists")
+
+    finally:
+        conn.close()
+
+
+# --- WALLET ---
+@app.get("/api/v1/wallet/{phone}")
+def get_wallet(phone: str):
+
+    conn = get_db_connection()
+
+    user = conn.execute("""
+        SELECT full_name, account_number, bank_partner, balance
+        FROM users
+        WHERE phone_number = ?
+    """, (phone,)).fetchone()
+
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    history = conn.execute("""
+        SELECT sender_name, recipient_name, amount, reference, date
+        FROM ledger
+        WHERE sender_phone = ?
+        ORDER BY id DESC
+    """, (phone,)).fetchall()
+
+    conn.close()
+
+    return {
+        "name": user["full_name"],
+        "account_number": user["account_number"],
+        "bank_partner": user["bank_partner"],
+        "balance": user["balance"],
+        "history": [dict(row) for row in history]
+    }
+
+
+# --- TRANSFER ENGINE (FIXED) ---
+@app.post("/api/v1/transfer/send")
+def transfer(payload: TransferRequest):
+
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid amount")
+
+    conn = get_db_connection()
+
+    try:
+        sender = conn.execute("""
+            SELECT full_name, balance
+            FROM users
+            WHERE phone_number = ?
+        """, (payload.sender_phone,)).fetchone()
+
+        if not sender:
+            raise HTTPException(status_code=404, detail="Sender not found")
+
+        if sender["balance"] < payload.amount:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
+
+        recipient = conn.execute("""
+            SELECT phone_number, full_name
+            FROM users
+            WHERE account_number = ?
+        """, (payload.destination_account,)).fetchone()
+
+        recipient_name = recipient["full_name"] if recipient else "External NIP Recipient"
+
+        # debit sender
+        conn.execute("""
+            UPDATE users
+            SET balance = balance - ?
+            WHERE phone_number = ?
+        """, (payload.amount, payload.sender_phone))
+
+        # credit recipient ONLY if internal user exists
+        if recipient:
+            conn.execute("""
+                UPDATE users
+                SET balance = balance + ?
+                WHERE phone_number = ?
+            """, (payload.amount, recipient["phone_number"]))
+
+        ref_id = f"FXP-NIP-{random.randint(100000, 999999)}"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        conn.execute("""
+            INSERT INTO ledger
+            (sender_phone, sender_name, recipient_account, recipient_name, amount, reference, date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            payload.sender_phone,
+            sender["full_name"],
+            payload.destination_account,
+            recipient_name,
+            payload.amount,
+            ref_id,
+            now
+        ))
+
+        conn.commit()
+
+        return {
+            "status": "success",
+            "reference": ref_id
+        }
+
+    except HTTPException as e:
+        conn.rollback()
+        raise e
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()

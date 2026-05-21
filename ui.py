@@ -86,14 +86,12 @@ def main(page: ft.Page):
         bvn = in_reg_bvn.value.strip()
         nin = in_reg_nin.value.strip()
 
-        # Check core fields first
         if not name or not phone:
             status_bar.value = "Name and Mobile Number fields are mandatory!"
             status_bar.color = "red"
             page.update()
             return
 
-        # Flexible Check: Ensure AT LEAST one of BVN or NIN has data
         if not bvn and not nin:
             status_bar.value = "Please enter either your BVN or your NIN to verify."
             status_bar.color = "orange"

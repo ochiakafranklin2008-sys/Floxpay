@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
-from decimal import Decimal
+from pydantic import BaseModel
 from datetime import datetime
 import sqlite3
 import random
@@ -9,23 +8,21 @@ from typing import Optional
 # --- FASTAPI INITIALIZATION ---
 app = FastAPI(
     title="Floxpay Nigeria Core Switch",
-    version="1.0.0",
-    description="CBN-compliant database core and automated NIP settlement"
+    version="1.0.0"
 )
 
-# --- PYDANTIC SCHEMAS ---
+# --- LOOSE DATA SCHEMA ---
 class SignupRequest(BaseModel):
     full_name: str
     phone_number: str
-    bvn: Optional[str] = None
-    nin: Optional[str] = None
+    bvn: Optional[str] = ""
+    nin: Optional[str] = ""
 
 class TransferRequest(BaseModel):
     sender_phone: str
     destination_account: str
     amount: float
 
-# --- DATABASE CONNECTION ---
 def get_db_connection():
     conn = sqlite3.connect("floxpay.db")
     conn.row_factory = sqlite3.Row
@@ -33,9 +30,7 @@ def get_db_connection():
 
 @app.on_event("startup")
 def startup_db():
-    """Builds the complete database ledger architecture on startup."""
     conn = get_db_connection()
-    # Users table (Allows BVN and NIN to be NULL/empty)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             phone_number TEXT PRIMARY KEY,
@@ -66,13 +61,13 @@ def startup_db():
 
 @app.post("/api/v1/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest):
-    """Registers a user with either BVN or NIN, auto-generates NUBAN, adds ₦10k."""
-    # Enforce that at least one verification identity exists
-    if not payload.bvn and not payload.nin:
-        raise HTTPException(
-            status_code=400, 
-            detail="Identity validation failed: Provide either your 11-digit BVN or NIN to activate."
-        )
+    # Make sure empty spaces are cleaned up
+    bvn_val = payload.bvn.strip() if payload.bvn else ""
+    nin_val = payload.nin.strip() if payload.nin else ""
+
+    # Ensure at least one is provided
+    if not bvn_val and not nin_val:
+        raise HTTPException(status_code=400, detail="Please enter either your BVN or your NIN to verify.")
 
     conn = get_db_connection()
     try:
@@ -82,7 +77,7 @@ def signup(payload: SignupRequest):
 
         conn.execute(
             "INSERT INTO users (phone_number, full_name, bvn, nin, account_number, bank_partner, balance) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (payload.phone_number, payload.full_name, payload.bvn or "", payload.nin or "", nuban, partner_bank, 10000.0)
+            (payload.phone_number, payload.full_name, bvn_val, nin_val, nuban, partner_bank, 10000.0)
         )
         conn.commit()
         return {"status": "success", "message": "Account activated"}
@@ -95,7 +90,6 @@ def signup(payload: SignupRequest):
 def get_wallet_dashboard(phone: str):
     conn = get_db_connection()
     user = conn.execute("SELECT full_name, account_number, bank_partner, balance FROM users WHERE phone_number = ?", (phone,)).fetchone()
-    
     if not user:
         conn.close()
         raise HTTPException(status_code=404, detail="User account not found.")
@@ -104,9 +98,7 @@ def get_wallet_dashboard(phone: str):
         "SELECT sender_name, recipient_name, amount, reference FROM ledger WHERE sender_phone = ? ORDER BY id DESC", 
         (phone,)
     ).fetchall()
-    
     conn.close()
-    
     return {
         "name": user["full_name"],
         "account_number": user["account_number"],
@@ -118,22 +110,17 @@ def get_wallet_dashboard(phone: str):
 @app.post("/api/v1/transfer/send")
 def execute_transfer(payload: TransferRequest):
     if payload.amount <= 0:
-        raise HTTPException(status_code=400, detail="Invalid transfer settlement amount.")
-        
+        raise HTTPException(status_code=400, detail="Invalid amount.")
     conn = get_db_connection()
     try:
         sender = conn.execute("SELECT full_name, balance FROM users WHERE phone_number = ?", (payload.sender_phone,)).fetchone()
-        if not sender:
-            raise HTTPException(status_code=404, detail="Authentication error.")
-            
-        if sender["balance"] < payload.amount:
-            raise HTTPException(status_code=400, detail="Insufficient settlement liquidity.")
+        if not sender or sender["balance"] < payload.amount:
+            raise HTTPException(status_code=400, detail="Declined or insufficient funds.")
             
         recipient = conn.execute("SELECT full_name FROM users WHERE account_number = ?", (payload.destination_account,)).fetchone()
-        recipient_name = recipient["full_name"] if recipient else f"CBN NIP Router Recipient ({payload.destination_account})"
+        recipient_name = recipient["full_name"] if recipient else f"External Account ({payload.destination_account})"
         
         conn.execute("UPDATE users SET balance = balance - ? WHERE phone_number = ?", (payload.amount, payload.sender_phone))
-        
         ref_id = f"FXP|NIP|{random.randint(100000, 999999)}"
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -145,6 +132,6 @@ def execute_transfer(payload: TransferRequest):
         return {"status": "success", "detail": "Settlement completed"}
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Core processing failure: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
